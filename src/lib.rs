@@ -193,6 +193,59 @@ pub fn and_then<T1: 'static, T2: 'static, I: 'static + Clone>(
     })
 }
 
+/// Creates a parser that matches two parsers in sequence, returning only the second result.
+pub fn prefixed<T1: 'static, T2: 'static, I: 'static + Clone>(
+    prefix: Parser<T1, I>,
+    parser: Parser<T2, I>,
+) -> Parser<T2, I> {
+    Parser::new(move |input: I| match prefix.run(input) {
+        ParseResult::Match(remaining, _) => match parser.run(remaining) {
+            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+            ParseResult::NoMatch => ParseResult::NoMatch,
+            ParseResult::Err(location) => ParseResult::Err(location),
+        },
+        ParseResult::NoMatch => ParseResult::NoMatch,
+        ParseResult::Err(location) => ParseResult::Err(location),
+    })
+}
+
+/// Creates a parser that matches two parsers in sequence, returning only the first result.
+pub fn suffixed<T1: 'static, T2: 'static, I: 'static + Clone>(
+    parser: Parser<T1, I>,
+    suffix: Parser<T2, I>,
+) -> Parser<T1, I> {
+    Parser::new(move |input: I| match parser.run(input) {
+        ParseResult::Match(remaining, result) => match suffix.run(remaining) {
+            ParseResult::Match(remaining, _) => ParseResult::Match(remaining, result),
+            ParseResult::NoMatch => ParseResult::NoMatch,
+            ParseResult::Err(location) => ParseResult::Err(location),
+        },
+        ParseResult::NoMatch => ParseResult::NoMatch,
+        ParseResult::Err(location) => ParseResult::Err(location),
+    })
+}
+
+/// Creates a parser that matches three parsers in sequence, returning only the second result.
+pub fn between<T1: 'static, T2: 'static, T3: 'static, I: 'static + Clone>(
+    prefix: Parser<T1, I>,
+    parser: Parser<T2, I>,
+    suffix: Parser<T3, I>,
+) -> Parser<T2, I> {
+    Parser::new(move |input: I| match prefix.run(input) {
+        ParseResult::Match(remaining, _) => match parser.run(remaining) {
+            ParseResult::Match(remaining, result) => match suffix.run(remaining) {
+                ParseResult::Match(remaining, _) => ParseResult::Match(remaining, result),
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            },
+            ParseResult::NoMatch => ParseResult::NoMatch,
+            ParseResult::Err(location) => ParseResult::Err(location),
+        },
+        ParseResult::NoMatch => ParseResult::NoMatch,
+        ParseResult::Err(location) => ParseResult::Err(location),
+    })
+}
+
 /// Creates a parser that matches the given inner parser N exactly times.
 pub fn repeat<T: 'static, I: 'static + Clone>(
     parser: Parser<T, I>,
@@ -260,5 +313,39 @@ pub fn many1<T: 'static, I: 'static + Clone>(parser: Parser<T, I>) -> Parser<Vec
         }
         ParseResult::NoMatch => ParseResult::NoMatch,
         ParseResult::Err(location) => ParseResult::Err(location),
+    })
+}
+
+/// Creates a parser that matches the given inner parser one or more times, separated by the given separator.
+pub fn sep_by1<T: 'static, S: 'static, I: 'static + Clone>(
+    parser: Parser<T, I>,
+    separator: Parser<S, I>,
+    parse_trailing: bool,
+) -> Parser<Vec<T>, I> {
+    let middle = many(prefixed(separator.clone(), parser.clone()));
+
+    let trailing = if parse_trailing {
+        map_to(opt(separator), ())
+    } else {
+        always(())
+    };
+
+    map(
+        suffixed(and_then(parser, middle), trailing),
+        |(head, mut tail)| {
+            tail.insert(0, head);
+            tail
+        },
+    )
+}
+
+/// Creates a parser that matches the given inner parser zero or more times, separated by the given separator.
+pub fn sep_by<T: 'static, S: 'static, I: 'static + Clone>(
+    parser: Parser<T, I>,
+    separator: Parser<S, I>,
+    parse_trailing: bool,
+) -> Parser<Vec<T>, I> {
+    map(opt(sep_by1(parser, separator, parse_trailing)), |list| {
+        list.unwrap_or(Vec::new())
     })
 }
