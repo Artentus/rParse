@@ -71,13 +71,13 @@ pub struct TextPosition {
 }
 
 #[derive(Clone, Copy)]
-pub struct TextInput {
-    text: &'static str,
+pub struct TextInput<'a> {
+    text: &'a str,
     pos: TextPosition,
 }
-impl TextInput {
+impl<'a> TextInput<'a> {
     #[must_use]
-    pub const fn new(text: &'static str) -> Self {
+    pub const fn new(text: &'a str) -> Self {
         Self {
             text,
             pos: TextPosition {
@@ -108,7 +108,7 @@ impl TextInput {
 
     #[inline]
     #[must_use]
-    pub fn starts_with<'a, P: std::str::pattern::Pattern<'a>>(&'a self, pat: P) -> bool {
+    pub fn starts_with<'b, P: std::str::pattern::Pattern<'b>>(&'b self, pat: P) -> bool {
         self.text.starts_with(pat)
     }
 
@@ -147,19 +147,21 @@ impl TextInput {
     }
 }
 
-pub type TextParser<T> = Parser<T, TextInput>;
+pub type TextParser<'a, T> = Parser<'a, T, TextInput<'a>>;
 
 /// Creates a parser that matches any char.
-pub fn any() -> TextParser<char> {
-    Parser::new(|input: TextInput| match input.chars().nth(0) {
-        Some(c) => ParseResult::Match(input.advance(1), c),
-        None => ParseResult::NoMatch,
+pub fn any<'a>() -> TextParser<'a, char> {
+    parser!(input: TextInput => {
+        match input.chars().nth(0) {
+            Some(c) => ParseResult::Match(input.advance(1), c),
+            None => ParseResult::NoMatch,
+        }
     })
 }
 
 /// Creates a parser that matches a specific char.
-pub fn char(c: char) -> TextParser<char> {
-    Parser::new(move |input: TextInput| {
+pub fn char<'a>(c: char) -> TextParser<'a, char> {
+    parser!(input: TextInput => {
         if input.starts_with(c) {
             ParseResult::Match(input.advance(1), c)
         } else {
@@ -169,36 +171,40 @@ pub fn char(c: char) -> TextParser<char> {
 }
 
 /// Creates a parser that matches a char based on a predicate function.
-pub fn matches(predicate: impl Fn(&char) -> bool + 'static) -> TextParser<char> {
-    Parser::new(move |input: TextInput| match input.chars().nth(0) {
-        Some(c) => {
-            if predicate(&c) {
-                ParseResult::Match(input.advance(1), c)
-            } else {
-                ParseResult::NoMatch
+pub fn matches<'a>(predicate: impl Fn(&char) -> bool + 'a) -> TextParser<'a, char> {
+    parser!(input: TextInput => {
+        match input.chars().nth(0) {
+            Some(c) => {
+                if predicate(&c) {
+                    ParseResult::Match(input.advance(1), c)
+                } else {
+                    ParseResult::NoMatch
+                }
             }
+            None => ParseResult::NoMatch,
         }
-        None => ParseResult::NoMatch,
     })
 }
 
 /// Creates a parser that matches one of the given chars. Chars are matched in order.
-pub fn one_of<L: 'static + CharCollection>(list: L) -> TextParser<char> {
-    Parser::new(move |input: TextInput| match input.chars().nth(0) {
-        Some(c) => {
-            if list.contains(c) {
-                ParseResult::Match(input.advance(1), c)
-            } else {
-                ParseResult::NoMatch
+pub fn one_of<'a, L: 'a + CharCollection>(list: L) -> TextParser<'a, char> {
+    parser!(input: TextInput => {
+        match input.chars().nth(0) {
+            Some(c) => {
+                if list.contains(c) {
+                    ParseResult::Match(input.advance(1), c)
+                } else {
+                    ParseResult::NoMatch
+                }
             }
+            None => ParseResult::NoMatch,
         }
-        None => ParseResult::NoMatch,
     })
 }
 
 /// Creates a parser that matches a specific string.
-pub fn string(s: &'static str) -> TextParser<String> {
-    Parser::new(move |input: TextInput| {
+pub fn string<'a>(s: &'a str) -> TextParser<String> {
+    parser!(input: TextInput => {
         if input.starts_with(s) {
             ParseResult::Match(input.advance(s.len()), s.to_string())
         } else {
@@ -208,8 +214,8 @@ pub fn string(s: &'static str) -> TextParser<String> {
 }
 
 /// Creates a parser that matches the end of the input.
-pub fn eof() -> TextParser<()> {
-    Parser::new(move |input: TextInput| {
+pub fn eof<'a>() -> TextParser<'a, ()> {
+    parser!(input: TextInput => {
         if input.len() == 0 {
             ParseResult::Match(input, ())
         } else {
@@ -222,94 +228,94 @@ pub fn collect_string(parser: TextParser<Vec<char>>) -> TextParser<String> {
     parser.map(|chars| chars.iter().collect())
 }
 
-pub fn whitespace() -> TextParser<char> {
+pub fn whitespace<'a>() -> TextParser<'a, char> {
     matches(char::is_ascii_whitespace)
 }
 
-pub fn alphabetic() -> TextParser<char> {
+pub fn alphabetic<'a>() -> TextParser<'a, char> {
     matches(char::is_ascii_alphabetic)
 }
 
-pub fn alphanumeric() -> TextParser<char> {
+pub fn alphanumeric<'a>() -> TextParser<'a, char> {
     matches(char::is_ascii_alphanumeric)
 }
 
-pub fn digit() -> TextParser<char> {
+pub fn digit<'a>() -> TextParser<'a, char> {
     matches(char::is_ascii_digit)
 }
 
-pub fn hexdigit() -> TextParser<char> {
+pub fn hexdigit<'a>() -> TextParser<'a, char> {
     matches(char::is_ascii_hexdigit)
 }
 
-pub fn octdigit() -> TextParser<char> {
+pub fn octdigit<'a>() -> TextParser<'a, char> {
     one_of("01234567")
 }
 
-pub fn bindigit() -> TextParser<char> {
+pub fn bindigit<'a>() -> TextParser<'a, char> {
     one_of("01")
 }
 
-pub fn sign() -> TextParser<char> {
+pub fn sign<'a>() -> TextParser<'a, char> {
     one_of("+-")
 }
 
-pub fn newline() -> TextParser<String> {
+pub fn newline<'a>() -> TextParser<'a, String> {
     choice([string("\n"), string("\r\n")])
 }
 
-pub fn whitespace0() -> TextParser<String> {
+pub fn whitespace0<'a>() -> TextParser<'a, String> {
     collect_string(whitespace().many())
 }
 
-pub fn whitespace1() -> TextParser<String> {
+pub fn whitespace1<'a>() -> TextParser<'a, String> {
     collect_string(whitespace().many1())
 }
 
-pub fn alphabetic0() -> TextParser<String> {
+pub fn alphabetic0<'a>() -> TextParser<'a, String> {
     collect_string(alphabetic().many())
 }
 
-pub fn alphabetic1() -> TextParser<String> {
+pub fn alphabetic1<'a>() -> TextParser<'a, String> {
     collect_string(alphabetic().many1())
 }
 
-pub fn alphanumeric0() -> TextParser<String> {
+pub fn alphanumeric0<'a>() -> TextParser<'a, String> {
     collect_string(alphanumeric().many())
 }
 
-pub fn alphanumeric1() -> TextParser<String> {
+pub fn alphanumeric1<'a>() -> TextParser<'a, String> {
     collect_string(alphanumeric().many1())
 }
 
-pub fn digit0() -> TextParser<String> {
+pub fn digit0<'a>() -> TextParser<'a, String> {
     collect_string(digit().many())
 }
 
-pub fn digit1() -> TextParser<String> {
+pub fn digit1<'a>() -> TextParser<'a, String> {
     collect_string(digit().many1())
 }
 
-pub fn hexdigit0() -> TextParser<String> {
+pub fn hexdigit0<'a>() -> TextParser<'a, String> {
     collect_string(hexdigit().many())
 }
 
-pub fn hexdigit1() -> TextParser<String> {
+pub fn hexdigit1<'a>() -> TextParser<'a, String> {
     collect_string(hexdigit().many1())
 }
 
-pub fn octdigit0() -> TextParser<String> {
+pub fn octdigit0<'a>() -> TextParser<'a, String> {
     collect_string(octdigit().many())
 }
 
-pub fn octdigit1() -> TextParser<String> {
+pub fn octdigit1<'a>() -> TextParser<'a, String> {
     collect_string(octdigit().many1())
 }
 
-pub fn bindigit0() -> TextParser<String> {
+pub fn bindigit0<'a>() -> TextParser<'a, String> {
     collect_string(bindigit().many())
 }
 
-pub fn bindigit1() -> TextParser<String> {
+pub fn bindigit1<'a>() -> TextParser<'a, String> {
     collect_string(bindigit().many1())
 }

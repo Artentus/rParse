@@ -1,8 +1,8 @@
 #![feature(pattern)]
 
-use std::ops::{BitAnd, BitOr, Shl, Shr};
-use std::rc::Rc;
 pub mod text;
+
+use std::rc::Rc;
 
 #[derive(Debug)]
 #[must_use]
@@ -17,12 +17,12 @@ pub enum ParseResult<T, I: Clone> {
 
 /// Parses some input into structured data.
 #[must_use]
-pub struct Parser<T, I: Clone> {
-    parse_fn: Rc<dyn Fn(I) -> ParseResult<T, I>>,
+pub struct Parser<'a, T, I: Clone> {
+    parse_fn: Rc<dyn Fn(I) -> ParseResult<T, I> + 'a>,
 }
-impl<T, I: Clone> Parser<T, I> {
+impl<'a, T, I: Clone> Parser<'a, T, I> {
     /// Creates a new parser from a function.
-    pub fn new<F: 'static + Fn(I) -> ParseResult<T, I>>(parse_fn: F) -> Self {
+    pub fn new(parse_fn: impl Fn(I) -> ParseResult<T, I> + 'a) -> Self {
         Self {
             parse_fn: Rc::new(parse_fn),
         }
@@ -33,7 +33,7 @@ impl<T, I: Clone> Parser<T, I> {
         (self.parse_fn)(input)
     }
 }
-impl<T, I: Clone> Clone for Parser<T, I> {
+impl<'a, T, I: Clone> Clone for Parser<'a, T, I> {
     fn clone(&self) -> Self {
         Self {
             parse_fn: Rc::clone(&self.parse_fn),
@@ -41,89 +41,110 @@ impl<T, I: Clone> Clone for Parser<T, I> {
     }
 }
 
-impl<T: 'static, I: 'static + Clone> Parser<T, I> {
+#[macro_export]
+macro_rules! parser {
+    ($input:ident: $input_type:ty => $body:block) => {
+        Parser::new(move |$input: $input_type| $body)
+    };
+}
+
+impl<'a, T: 'a, I: 'a + Clone> Parser<'a, T, I> {
     /// Errors if the parser did not match.
     pub fn require(self) -> Self {
-        Parser::new(move |input: I| match self.run(input.clone()) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
-            ParseResult::NoMatch => ParseResult::Err(input),
-            ParseResult::Err(location) => ParseResult::Err(location),
+        parser!(input: I => {
+            match self.run(input.clone()) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+                ParseResult::NoMatch => ParseResult::Err(input),
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Doesn't match if the given validation function returns false.
-    pub fn verify(self, f: impl Fn(&T) -> bool + 'static) -> Self {
-        Parser::new(move |input: I| match self.run(input.clone()) {
-            ParseResult::Match(remaining, result) => {
-                if f(&result) {
-                    ParseResult::Match(remaining, result)
-                } else {
-                    ParseResult::NoMatch
+    pub fn verify(self, f: impl Fn(&T) -> bool + 'a) -> Self {
+        parser!(input: I => {
+            match self.run(input.clone()) {
+                ParseResult::Match(remaining, result) => {
+                    if f(&result) {
+                        ParseResult::Match(remaining, result)
+                    } else {
+                        ParseResult::NoMatch
+                    }
                 }
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
             }
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
         })
     }
 
     /// Returns None if the parser did not match.
-    pub fn opt(self) -> Parser<Option<T>, I> {
-        Parser::new(move |input: I| match self.run(input.clone()) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, Some(result)),
-            ParseResult::NoMatch => ParseResult::Match(input, None),
-            ParseResult::Err(location) => ParseResult::Err(location),
+    pub fn opt(self) -> Parser<'a, Option<T>, I> {
+        parser!(input: I => {
+            match self.run(input.clone()) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(remaining, Some(result)),
+                ParseResult::NoMatch => ParseResult::Match(input, None),
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Returns a specific value if the parser matches.
-    pub fn map_to<T2: 'static + Clone>(self, value: T2) -> Parser<T2, I> {
-        Parser::new(move |input: I| match self.run(input) {
-            ParseResult::Match(remaining, _) => ParseResult::Match(remaining, value.clone()),
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
+    pub fn map_to<T2: 'a + Clone>(self, value: T2) -> Parser<'a, T2, I> {
+        parser!(input: I => {
+            match self.run(input) {
+                ParseResult::Match(remaining, _) => ParseResult::Match(remaining, value.clone()),
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Maps the parsed result using a mapping function if the parser matches.
-    pub fn map<T2: 'static>(self, mapping: impl Fn(T) -> T2 + 'static) -> Parser<T2, I> {
-        Parser::new(move |input: I| match self.run(input) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, mapping(result)),
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
+    pub fn map<T2: 'a>(self, mapping: impl Fn(T) -> T2 + 'a) -> Parser<'a, T2, I> {
+        parser!(input: I => {
+            match self.run(input) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(remaining, mapping(result)),
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Matches another parser in sequence.
-    pub fn and_then<T2: 'static>(self, other: Parser<T2, I>) -> Parser<(T, T2), I> {
-        Parser::new(move |input: I| match self.run(input) {
-            ParseResult::Match(remaining, result1) => match other.run(remaining) {
-                ParseResult::Match(remaining, result2) => {
-                    ParseResult::Match(remaining, (result1, result2))
-                }
+    pub fn and_then<T2: 'a>(self, other: Parser<'a, T2, I>) -> Parser<'a, (T, T2), I> {
+        parser!(input: I => {
+            match self.run(input) {
+                ParseResult::Match(remaining, result1) => match other.run(remaining) {
+                    ParseResult::Match(remaining, result2) => {
+                        ParseResult::Match(remaining, (result1, result2))
+                    }
+                    ParseResult::NoMatch => ParseResult::NoMatch,
+                    ParseResult::Err(location) => ParseResult::Err(location),
+                },
                 ParseResult::NoMatch => ParseResult::NoMatch,
                 ParseResult::Err(location) => ParseResult::Err(location),
-            },
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Matches either this parser or another.
     pub fn or_else(self, other: Self) -> Self {
-        Parser::new(move |input: I| match self.run(input.clone()) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
-            ParseResult::NoMatch => match other.run(input) {
+        parser!(input: I => {
+            match self.run(input.clone()) {
                 ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
-                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::NoMatch => match other.run(input) {
+                    ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+                    ParseResult::NoMatch => ParseResult::NoMatch,
+                    ParseResult::Err(location) => ParseResult::Err(location),
+                },
                 ParseResult::Err(location) => ParseResult::Err(location),
-            },
-            ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 
     /// Matches the parser exactly 'count' times.
-    pub fn repeat(self, count: usize) -> Parser<Vec<T>, I> {
-        Parser::new(move |input: I| {
+    pub fn repeat(self, count: usize) -> Parser<'a, Vec<T>, I> {
+        parser!(input: I => {
             let mut results = Vec::with_capacity(count);
             let mut remaining = input;
 
@@ -143,8 +164,8 @@ impl<T: 'static, I: 'static + Clone> Parser<T, I> {
     }
 
     /// Matches the parser zero or more times.
-    pub fn many(self) -> Parser<Vec<T>, I> {
-        Parser::new(move |input: I| {
+    pub fn many(self) -> Parser<'a, Vec<T>, I> {
+        parser!(input: I => {
             let mut results = Vec::new();
             let mut remaining = input;
 
@@ -164,36 +185,38 @@ impl<T: 'static, I: 'static + Clone> Parser<T, I> {
     }
 
     /// Matches the parser one or more times.
-    pub fn many1(self) -> Parser<Vec<T>, I> {
-        Parser::new(move |input: I| match self.run(input) {
-            ParseResult::Match(mut remaining, result) => {
-                let mut results = Vec::new();
-                results.push(result);
+    pub fn many1(self) -> Parser<'a, Vec<T>, I> {
+        parser!(input: I => {
+            match self.run(input) {
+                ParseResult::Match(mut remaining, result) => {
+                    let mut results = Vec::new();
+                    results.push(result);
 
-                loop {
-                    match self.run(remaining.clone()) {
-                        ParseResult::Match(new_remaining, result) => {
-                            remaining = new_remaining;
-                            results.push(result);
+                    loop {
+                        match self.run(remaining.clone()) {
+                            ParseResult::Match(new_remaining, result) => {
+                                remaining = new_remaining;
+                                results.push(result);
+                            }
+                            ParseResult::NoMatch => break,
+                            ParseResult::Err(location) => return ParseResult::Err(location),
                         }
-                        ParseResult::NoMatch => break,
-                        ParseResult::Err(location) => return ParseResult::Err(location),
                     }
-                }
 
-                ParseResult::Match(remaining, results)
+                    ParseResult::Match(remaining, results)
+                }
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
             }
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
         })
     }
 
     /// Matches the parser one or more times, separated by the given separator.
-    pub fn sep_by1<S: 'static>(
+    pub fn sep_by1<S: 'a>(
         self,
-        separator: Parser<S, I>,
+        separator: Parser<'a, S, I>,
         parse_trailing: bool,
-    ) -> Parser<Vec<T>, I> {
+    ) -> Parser<'a, Vec<T>, I> {
         let middle = prefixed(separator.clone(), self.clone()).many();
 
         let trailing = if parse_trailing {
@@ -209,66 +232,70 @@ impl<T: 'static, I: 'static + Clone> Parser<T, I> {
     }
 
     /// Matches the parser zero or more times, separated by the given separator.
-    pub fn sep_by<S: 'static>(
+    pub fn sep_by<S: 'a>(
         self,
-        separator: Parser<S, I>,
+        separator: Parser<'a, S, I>,
         parse_trailing: bool,
-    ) -> Parser<Vec<T>, I> {
+    ) -> Parser<'a, Vec<T>, I> {
         self.sep_by1(separator, parse_trailing)
             .opt()
             .map(|list| list.unwrap_or(Vec::new()))
     }
 }
 
-impl<T: 'static + Clone, I: 'static + Clone> Parser<T, I> {
+impl<'a, T: 'a + Clone, I: 'a + Clone> Parser<'a, T, I> {
     /// Returns a default value if the parser did not match.
     pub fn or_default(self, default: T) -> Self {
-        Parser::new(move |input: I| match self.run(input.clone()) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
-            ParseResult::NoMatch => ParseResult::Match(input, default.clone()),
-            ParseResult::Err(location) => ParseResult::Err(location),
+        parser!(input: I => {
+            match self.run(input.clone()) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+                ParseResult::NoMatch => ParseResult::Match(input, default.clone()),
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 }
 
-impl<T: 'static, Iter, I: 'static + Clone> Parser<Iter, I>
+impl<'a, T: 'a, Iter, I: 'a + Clone> Parser<'a, Iter, I>
 where
-    Iter: 'static + IntoIterator<Item = &'static T>,
+    Iter: 'a + IntoIterator<Item = &'a T>,
 {
     /// Folds the parsed result into a single value using an aggregator function.
-    pub fn fold<T2: 'static + Clone>(
+    pub fn fold<T2: 'a + Clone>(
         self,
         init: T2,
-        f: impl Fn(T2, &T) -> T2 + 'static,
-    ) -> Parser<T2, I> {
-        Parser::new(move |input: I| match self.run(input) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(
-                remaining,
-                result
-                    .into_iter()
-                    .fold(init.clone(), |acc, item| f(acc, item)),
-            ),
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
+        f: impl Fn(T2, &T) -> T2 + 'a,
+    ) -> Parser<'a, T2, I> {
+        parser!(input: I => {
+            match self.run(input) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(
+                    remaining,
+                    result
+                        .into_iter()
+                        .fold(init.clone(), |acc, item| f(acc, item)),
+                ),
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            }
         })
     }
 }
 
 /// Creates a parser that always matches and returns the specified value.
-pub fn always<T: 'static + Clone, I: Clone>(value: T) -> Parser<T, I> {
-    Parser::new(move |input: I| ParseResult::Match(input, value.clone()))
+pub fn always<'a, T: 'a + Clone, I: Clone>(value: T) -> Parser<'a, T, I> {
+    parser!(input: I => { ParseResult::Match(input, value.clone()) })
 }
 
 /// Creates a parser that never matches.
-pub fn never<T, I: Clone>() -> Parser<T, I> {
-    Parser::new(move |_input: I| ParseResult::NoMatch)
+pub fn never<'a, T, I: Clone>() -> Parser<'a, T, I> {
+    parser!(_input: I => { ParseResult::NoMatch })
 }
 
 /// Creates a parser that matches any of the given parsers. Parsers are matched in order.
-pub fn choice<T: 'static, I: 'static + Clone, const N: usize>(
-    parsers: [Parser<T, I>; N],
-) -> Parser<T, I> {
-    Parser::new(move |input: I| {
+pub fn choice<'a, T: 'a, I: 'a + Clone, const N: usize>(
+    parsers: [Parser<'a, T, I>; N],
+) -> Parser<'a, T, I> {
+    parser!(input: I => {
         for parser in parsers.clone() {
             match parser.run(input.clone()) {
                 ParseResult::Match(remaining, result) => {
@@ -284,10 +311,10 @@ pub fn choice<T: 'static, I: 'static + Clone, const N: usize>(
 }
 
 /// Creates a parser that matches all of the given parsers, in order.
-pub fn sequence<T: 'static, I: 'static + Clone, const N: usize>(
-    parsers: [Parser<T, I>; N],
-) -> Parser<Vec<T>, I> {
-    Parser::new(move |input: I| {
+pub fn sequence<'a, T: 'a, I: 'a + Clone, const N: usize>(
+    parsers: [Parser<'a, T, I>; N],
+) -> Parser<'a, Vec<T>, I> {
+    parser!(input: I => {
         let mut results = Vec::with_capacity(N);
         let mut remaining = input;
 
@@ -307,45 +334,30 @@ pub fn sequence<T: 'static, I: 'static + Clone, const N: usize>(
 }
 
 /// Creates a parser that matches two parsers in sequence, returning only the second result.
-pub fn prefixed<T1: 'static, T2: 'static, I: 'static + Clone>(
-    prefix: Parser<T1, I>,
-    parser: Parser<T2, I>,
-) -> Parser<T2, I> {
-    Parser::new(move |input: I| match prefix.run(input) {
-        ParseResult::Match(remaining, _) => match parser.run(remaining) {
-            ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+pub fn prefixed<'a, T1: 'a, T2: 'a, I: 'a + Clone>(
+    prefix: Parser<'a, T1, I>,
+    parser: Parser<'a, T2, I>,
+) -> Parser<'a, T2, I> {
+    parser!(input: I => {
+        match prefix.run(input) {
+            ParseResult::Match(remaining, _) => match parser.run(remaining) {
+                ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            },
             ParseResult::NoMatch => ParseResult::NoMatch,
             ParseResult::Err(location) => ParseResult::Err(location),
-        },
-        ParseResult::NoMatch => ParseResult::NoMatch,
-        ParseResult::Err(location) => ParseResult::Err(location),
+        }
     })
 }
 
 /// Creates a parser that matches two parsers in sequence, returning only the first result.
-pub fn suffixed<T1: 'static, T2: 'static, I: 'static + Clone>(
-    parser: Parser<T1, I>,
-    suffix: Parser<T2, I>,
-) -> Parser<T1, I> {
-    Parser::new(move |input: I| match parser.run(input) {
-        ParseResult::Match(remaining, result) => match suffix.run(remaining) {
-            ParseResult::Match(remaining, _) => ParseResult::Match(remaining, result),
-            ParseResult::NoMatch => ParseResult::NoMatch,
-            ParseResult::Err(location) => ParseResult::Err(location),
-        },
-        ParseResult::NoMatch => ParseResult::NoMatch,
-        ParseResult::Err(location) => ParseResult::Err(location),
-    })
-}
-
-/// Creates a parser that matches three parsers in sequence, returning only the second result.
-pub fn between<T1: 'static, T2: 'static, T3: 'static, I: 'static + Clone>(
-    prefix: Parser<T1, I>,
-    parser: Parser<T2, I>,
-    suffix: Parser<T3, I>,
-) -> Parser<T2, I> {
-    Parser::new(move |input: I| match prefix.run(input) {
-        ParseResult::Match(remaining, _) => match parser.run(remaining) {
+pub fn suffixed<'a, T1: 'a, T2: 'a, I: 'a + Clone>(
+    parser: Parser<'a, T1, I>,
+    suffix: Parser<'a, T2, I>,
+) -> Parser<'a, T1, I> {
+    parser!(input: I => {
+        match parser.run(input) {
             ParseResult::Match(remaining, result) => match suffix.run(remaining) {
                 ParseResult::Match(remaining, _) => ParseResult::Match(remaining, result),
                 ParseResult::NoMatch => ParseResult::NoMatch,
@@ -353,23 +365,47 @@ pub fn between<T1: 'static, T2: 'static, T3: 'static, I: 'static + Clone>(
             },
             ParseResult::NoMatch => ParseResult::NoMatch,
             ParseResult::Err(location) => ParseResult::Err(location),
-        },
-        ParseResult::NoMatch => ParseResult::NoMatch,
-        ParseResult::Err(location) => ParseResult::Err(location),
+        }
+    })
+}
+
+/// Creates a parser that matches three parsers in sequence, returning only the second result.
+pub fn between<'a, T1: 'a, T2: 'a, T3: 'a, I: 'a + Clone>(
+    prefix: Parser<'a, T1, I>,
+    parser: Parser<'a, T2, I>,
+    suffix: Parser<'a, T3, I>,
+) -> Parser<'a, T2, I> {
+    parser!(input: I => {
+        match prefix.run(input) {
+            ParseResult::Match(remaining, _) => match parser.run(remaining) {
+                ParseResult::Match(remaining, result) => match suffix.run(remaining) {
+                    ParseResult::Match(remaining, _) => ParseResult::Match(remaining, result),
+                    ParseResult::NoMatch => ParseResult::NoMatch,
+                    ParseResult::Err(location) => ParseResult::Err(location),
+                },
+                ParseResult::NoMatch => ParseResult::NoMatch,
+                ParseResult::Err(location) => ParseResult::Err(location),
+            },
+            ParseResult::NoMatch => ParseResult::NoMatch,
+            ParseResult::Err(location) => ParseResult::Err(location),
+        }
     })
 }
 
 #[cfg(feature = "operators")]
-impl<T1: 'static, T2: 'static, I: 'static + Clone> BitAnd<Parser<T2, I>> for Parser<T1, I> {
-    type Output = Parser<(T1, T2), I>;
+use std::ops::{BitAnd, BitOr, Shl, Shr};
 
-    fn bitand(self, rhs: Parser<T2, I>) -> Self::Output {
+#[cfg(feature = "operators")]
+impl<'a, T1: 'a, T2: 'a, I: 'a + Clone> BitAnd<Parser<'a, T2, I>> for Parser<'a, T1, I> {
+    type Output = Parser<'a, (T1, T2), I>;
+
+    fn bitand(self, rhs: Parser<'a, T2, I>) -> Self::Output {
         self.and_then(rhs)
     }
 }
 
 #[cfg(feature = "operators")]
-impl<T: 'static, I: 'static + Clone> BitOr for Parser<T, I> {
+impl<'a, T: 'a, I: 'a + Clone> BitOr for Parser<'a, T, I> {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -378,19 +414,19 @@ impl<T: 'static, I: 'static + Clone> BitOr for Parser<T, I> {
 }
 
 #[cfg(feature = "operators")]
-impl<T1: 'static, T2: 'static, I: 'static + Clone> Shl<Parser<T2, I>> for Parser<T1, I> {
-    type Output = Parser<T1, I>;
+impl<'a, T1: 'a, T2: 'a, I: 'a + Clone> Shl<Parser<'a, T2, I>> for Parser<'a, T1, I> {
+    type Output = Parser<'a, T1, I>;
 
-    fn shl(self, rhs: Parser<T2, I>) -> Self::Output {
+    fn shl(self, rhs: Parser<'a, T2, I>) -> Self::Output {
         suffixed(self, rhs)
     }
 }
 
 #[cfg(feature = "operators")]
-impl<T1: 'static, T2: 'static, I: 'static + Clone> Shr<Parser<T2, I>> for Parser<T1, I> {
-    type Output = Parser<T2, I>;
+impl<'a, T1: 'a, T2: 'a, I: 'a + Clone> Shr<Parser<'a, T2, I>> for Parser<'a, T1, I> {
+    type Output = Parser<'a, T2, I>;
 
-    fn shr(self, rhs: Parser<T2, I>) -> Self::Output {
+    fn shr(self, rhs: Parser<'a, T2, I>) -> Self::Output {
         prefixed(self, rhs)
     }
 }
