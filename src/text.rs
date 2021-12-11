@@ -219,7 +219,7 @@ pub fn eof() -> TextParser<()> {
 }
 
 pub fn collect_string(parser: TextParser<Vec<char>>) -> TextParser<String> {
-    map(parser, |chars| chars.iter().collect())
+    parser.map(|chars| chars.iter().collect())
 }
 
 pub fn whitespace() -> TextParser<char> {
@@ -259,57 +259,57 @@ pub fn newline() -> TextParser<String> {
 }
 
 pub fn whitespace0() -> TextParser<String> {
-    collect_string(many(whitespace()))
+    collect_string(whitespace().many())
 }
 
 pub fn whitespace1() -> TextParser<String> {
-    collect_string(many1(whitespace()))
+    collect_string(whitespace().many1())
 }
 
 pub fn alphabetic0() -> TextParser<String> {
-    collect_string(many(alphabetic()))
+    collect_string(alphabetic().many())
 }
 
 pub fn alphabetic1() -> TextParser<String> {
-    collect_string(many1(alphabetic()))
+    collect_string(alphabetic().many1())
 }
 
 pub fn alphanumeric0() -> TextParser<String> {
-    collect_string(many(alphanumeric()))
+    collect_string(alphanumeric().many())
 }
 
 pub fn alphanumeric1() -> TextParser<String> {
-    collect_string(many1(alphanumeric()))
+    collect_string(alphanumeric().many1())
 }
 
 pub fn digit0() -> TextParser<String> {
-    collect_string(many(digit()))
+    collect_string(digit().many())
 }
 
 pub fn digit1() -> TextParser<String> {
-    collect_string(many1(digit()))
+    collect_string(digit().many1())
 }
 
 pub fn hexdigit0() -> TextParser<String> {
-    collect_string(many(hexdigit()))
+    collect_string(hexdigit().many())
 }
 
 pub fn hexdigit1() -> TextParser<String> {
-    collect_string(many1(hexdigit()))
+    collect_string(hexdigit().many1())
 }
 
 pub fn octdigit0() -> TextParser<String> {
-    collect_string(many(octdigit()))
+    collect_string(octdigit().many())
 }
 
 pub fn octdigit1() -> TextParser<String> {
-    collect_string(many1(octdigit()))
+    collect_string(octdigit().many1())
 }
 
 pub fn bindigit0() -> TextParser<String> {
-    collect_string(many(bindigit()))
+    collect_string(bindigit().many())
 }
 
 pub fn bindigit1() -> TextParser<String> {
-    collect_string(many1(bindigit()))
+    collect_string(bindigit().many1())
 }
