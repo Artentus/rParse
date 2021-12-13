@@ -209,6 +209,22 @@ pub fn one_of<'a, L: 'a + CharCollection>(list: L) -> TextParser<'a, char> {
     })
 }
 
+/// Creates a parser that matches any char except one of the given chars.
+pub fn any_except<'a, L: 'a + CharCollection>(list: L) -> TextParser<'a, char> {
+    parser!(input: TextInput => {
+        match input.chars().nth(0) {
+            Some(c) => {
+                if list.contains(c) {
+                    ParseResult::NoMatch
+                } else {
+                    ParseResult::Match(input.advance(1), c)
+                }
+            }
+            None => ParseResult::NoMatch,
+        }
+    })
+}
+
 /// Creates a parser that matches a specific string.
 pub fn string<'a>(s: &'a str) -> TextParser<String> {
     parser!(input: TextInput => {
