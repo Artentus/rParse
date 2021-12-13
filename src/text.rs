@@ -27,13 +27,20 @@ impl StringUtils for str {
         };
 
         let mut chars = self.char_indices();
-        let byte_start_inclusive = chars.nth(char_start_inclusive).unwrap().0;
+        let byte_start_inclusive = match chars.nth(char_start_inclusive) {
+            Some((byte_start_inclusive, _)) => byte_start_inclusive,
+            None => self.len(),
+        };
+
         let byte_end_exclusive: usize = match char_len {
             Some(char_len) => {
                 if char_len == 0 {
                     byte_start_inclusive
                 } else {
-                    chars.nth(char_len - 1).unwrap().0
+                    match chars.nth(char_len - 1) {
+                        Some((byte_end_exclusive, _)) => byte_end_exclusive,
+                        None => self.len(),
+                    }
                 }
             }
             None => self.len(),
@@ -206,7 +213,7 @@ pub fn one_of<'a, L: 'a + CharCollection>(list: L) -> TextParser<'a, char> {
 pub fn string<'a>(s: &'a str) -> TextParser<String> {
     parser!(input: TextInput => {
         if input.starts_with(s) {
-            ParseResult::Match(input.advance(s.len()), s.to_string())
+            ParseResult::Match(input.advance(s.chars().count()), s.to_string())
         } else {
             ParseResult::NoMatch
         }
