@@ -50,14 +50,11 @@ macro_rules! parser {
 
 impl<'a, T: 'a, E: 'a, I: 'a + Clone> Parser<'a, T, E, I> {
     /// Errors if the parser did not match.
-    pub fn require(self, err_on_no_match: E) -> Self
-    where
-        E: Clone,
-    {
+    pub fn require(self, gen_err: impl Fn(I) -> E + 'a) -> Self {
         parser!(input: I => {
             match self.run(input.clone()) {
                 ParseResult::Match(remaining, result) => ParseResult::Match(remaining, result),
-                ParseResult::NoMatch => ParseResult::Err(input, err_on_no_match.clone()),
+                ParseResult::NoMatch => ParseResult::Err(input.clone(), gen_err(input)),
                 ParseResult::Err(location, err) => ParseResult::Err(location, err),
             }
         })
