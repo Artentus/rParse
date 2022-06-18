@@ -14,6 +14,15 @@ pub enum ParseResult<T, E, I: Clone> {
     /// The input matched the parser pattern but was malformed or invalid.
     Err(I, E),
 }
+impl<T, E, I: Clone> ParseResult<T, E, I> {
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> ParseResult<R, E, I> {
+        match self {
+            Self::Match(remaining, t) => ParseResult::Match(remaining, f(t)),
+            Self::NoMatch => ParseResult::NoMatch,
+            Self::Err(remaining, err) => ParseResult::Err(remaining, err),
+        }
+    }
+}
 
 /// Parses some input into structured data.
 #[must_use]
